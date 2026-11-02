@@ -1,1 +1,418 @@
+import streamlit as st, json, hashlib, datetime, sqlite3, uuid, random, string, shutil
+from pathlib import Path
+import pandas as pd
 
+st.set_page_config(page_title="BASA JUEGOS AZAR V50 PRO - Ley 86-26", layout="wide", page_icon="🎰")
+
+# V50 - BASES SIN PUNTOS - SOLO NUMEROS REDONDOS
+BASE_DIR=Path("BASA_JUEGOS_AZAR_V50_PROFESIONAL")
+CLIENTES_DB=BASE_DIR/"clientes_db"
+BASE_DIR.mkdir(exist_ok=True)
+CLIENTES_DB.mkdir(exist_ok=True)
+BACKUP_DIR=BASE_DIR/"backup_ley8626_v50"
+BACKUP_DIR.mkdir(exist_ok=True)
+CASOS_DIR=CLIENTES_DB
+
+BASES_VIEJAS=["BASA_JUEGOS_AZAR_V71_PROFESIONAL","BASA_JUEGOS_AZAR_v71_PROFESIONAL","BASA_eCF_PRO_V71_PROFESIONAL","clientes_db"]
+MASTER_USER={"email":"Licpedrobaldera@gmail.com","password_hash":hashlib.sha256("Basa2026!".encode()).hexdigest(),"rnc":"133378711"}
+CRED={"nombre":"Lic. Pedro A. Baldera R.","empresa":"Baldera Santos & Asociados SRL","rnc":"133378711","telefono":"829-771-7390","whatsapp":"829-771-7390","email":"licpedrobaldera@gmail.com","direccion":"Calle Orlando Martinez No.49, Brisas del Este, Santo Domingo Este"}
+
+REQUISITOS_V50={
+    "BANCA_LOTERIA_5ANOS":{"articulos":"Art 21, 26, 39, 191 - Gaceta 11263","tipo":"Banca Loteria - 5 anos","vigencia":"5 anos","documentos":[
+        {"nombre":"Cedula o RNC solicitante","art":"Art 39.a","obligatorio":True},
+        {"nombre":"Certificacion no antecedentes penales","art":"Art 39.b","obligatorio":True},
+        {"nombre":"Estados financieros auditados 2 anos","art":"Art 39.c","obligatorio":True},
+        {"nombre":"Declaracion jurada origen licito fondos Ley 155-17","art":"Art 39.d y Art 281","obligatorio":True},
+        {"nombre":"Certificacion DGII al dia","art":"Art 39.e","obligatorio":True},
+        {"nombre":"Certificacion TSS al dia","art":"Art 39.f","obligatorio":True},
+        {"nombre":"Contrato alquiler o titulo propiedad","art":"Art 26","obligatorio":True},
+        {"nombre":"Plano distancias 500m escuelas/iglesias/hospitales y 200m bancas","art":"Art 26 - 500m y 200m","obligatorio":True},
+        {"nombre":"Fotos local interior y exterior","art":"Art 39","obligatorio":True},
+        {"nombre":"Uso suelo Ayuntamiento","art":"Art 26","obligatorio":True},
+    ]},
+    "BANCA_DEPORTIVA_10ANOS":{"articulos":"Art 21, 26, 39, 70-72","tipo":"Banca Deportiva - 10 anos - Max 15","vigencia":"10 anos","documentos":[
+        {"nombre":"Todos requisitos Banca Loteria","art":"Art 21","obligatorio":True},
+        {"nombre":"Licencia tragamonedas Max 15","art":"Art 70","obligatorio":True},
+        {"nombre":"Plan premios 85% devolucion","art":"Art 72","obligatorio":True},
+    ]},
+    "CASINO_10ANOS":{"articulos":"Art 47, 70","tipo":"Casino - 10 anos - Solo hoteles 4 estrellas","vigencia":"10 anos","documentos":[
+        {"nombre":"Certificacion hotel 4 estrellas","art":"Art 47","obligatorio":True},
+        {"nombre":"Licencia casino 10 anos","art":"Art 47","obligatorio":True},
+    ]},
+}
+
+def get_db_path(cid):
+    cf=CASOS_DIR/cid
+    cf.mkdir(exist_ok=True, parents=True)
+    (cf/"documentos").mkdir(exist_ok=True, parents=True)
+    (cf/"contratos").mkdir(exist_ok=True, parents=True)
+    (cf/"levantamiento").mkdir(exist_ok=True, parents=True)
+    (cf/"comprobantes").mkdir(exist_ok=True, parents=True)
+    return cf/f"BASA_JUEGO_{cid}_V50.db"
+
+def init_db_v50(cid):
+    dbp=get_db_path(cid)
+    conn=sqlite3.connect(str(dbp))
+    c=conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS solicitantes (id TEXT PRIMARY KEY, nombre TEXT, rnc_cedula TEXT, email TEXT, telefono TEXT, direccion TEXT, tipo_establecimiento TEXT, vigencia TEXT, articulos_ley TEXT, porcentaje_avance INTEGER, estado TEXT, fecha_solicitud TEXT, usuario_id TEXT, clave_hash TEXT, fecha_vencimiento_licencia TEXT, latitud REAL, longitud REAL, ip_licencia_red TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS documentos_ley8626 (id TEXT PRIMARY KEY, solicitante_id TEXT, nombre_documento TEXT, articulo_ley TEXT, obligatorio INTEGER, estado TEXT, archivo_path TEXT, fecha_subida TEXT, validado_por TEXT, fecha_validacion TEXT, observaciones TEXT, porcentaje INTEGER)")
+    c.execute("CREATE TABLE IF NOT EXISTS contratos_intermediacion (id TEXT PRIMARY KEY, solicitante_id TEXT, tipo_contrato TEXT, estado TEXT, archivo_contrato_path TEXT, firma_electronica TEXT, fecha_firma TEXT, firma_digital_path TEXT, validado_hacienda TEXT, validado_cliente TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS levantamiento_bancas (id TEXT PRIMARY KEY, nombre_banca TEXT, tipo TEXT, direccion_real TEXT, telefono_real TEXT, propietario_responsable TEXT, cedula_responsable TEXT, latitud REAL, longitud REAL, ip_red TEXT, estado_formalidad TEXT, fotos_path TEXT, fecha_levantamiento TEXT, levantado_por TEXT, redes_sociales_json TEXT, solo_admin INTEGER, formal_registrada_dgja INTEGER)")
+    c.execute("CREATE TABLE IF NOT EXISTS cuentas_pago_admin (id TEXT PRIMARY KEY, banco TEXT, numero_cuenta TEXT, titular TEXT, tipo_cuenta TEXT, moneda TEXT, ubicacion TEXT, estado TEXT, fecha_creacion TEXT, creado_por TEXT, notas TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS pagos (id TEXT PRIMARY KEY, solicitante_id TEXT, monto REAL, referencia TEXT, fecha_pago TEXT, comprobante_path TEXT, estado TEXT, cuenta_pago_id TEXT, liberado_por TEXT, fecha_liberacion TEXT, usuario_email TEXT)")
+    conn.commit()
+    conn.close()
+    return dbp
+
+def save_doc(cid, uploaded_file, nombre_doc):
+    cf=CASOS_DIR/cid/"documentos"
+    fname=f"{nombre_doc.replace(' ','_')[:30]}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uploaded_file.name}"
+    fpath=cf/fname
+    with open(fpath,"wb") as f: f.write(uploaded_file.getbuffer())
+    return str(fpath)
+
+def save_comp(cid, uploaded_file):
+    cf=CASOS_DIR/cid/"comprobantes"
+    fname=f"comprobante_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uploaded_file.name}"
+    fpath=cf/fname
+    with open(fpath,"wb") as f: f.write(uploaded_file.getbuffer())
+    return str(fpath)
+
+def calcular_avance(cid):
+    dbp=get_db_path(cid)
+    conn=sqlite3.connect(str(dbp))
+    c=conn.cursor()
+    try:
+        c.execute("SELECT COUNT(*), SUM(CASE WHEN estado LIKE 'Validado%' THEN 1 ELSE 0 END) FROM documentos_ley8626 WHERE solicitante_id=?", (cid,))
+        total, validados=c.fetchone()
+        conn.close()
+        if total==0 or total is None: return 0
+        return int((validados or 0)*100/total)
+    except:
+        conn.close()
+        return 0
+
+def get_cuenta_activa():
+    for cf in CASOS_DIR.iterdir():
+        if cf.is_dir():
+            dbp=cf/f"BASA_JUEGO_{cf.name}_V50.db"
+            if not dbp.exists():
+                dbp=cf/f"BASA_JUEGO_{cf.name}.db"
+            if dbp.exists():
+                try:
+                    conn=sqlite3.connect(str(dbp))
+                    c=conn.cursor()
+                    c.execute("SELECT * FROM cuentas_pago_admin WHERE estado='Activa' ORDER BY fecha_creacion DESC LIMIT 1")
+                    row=c.fetchone()
+                    conn.close()
+                    if row: return row
+                except: pass
+    return ("CUENTA-OFICIAL-V50-001", "BHD León", "08694150021", "Pedro Anibal Baldera", "Ahorros en Pesos", "DOP", "RD Local", "Activa", datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"), "Licpedrobaldera@gmail.com", "Cuenta oficial V50 08694150021 Ahorros Pesos RD Local Ley 86-26")
+
+def format_cuenta(cuenta_row):
+    if not cuenta_row: return '<div>Cuenta autorizada</div>'
+    banco=cuenta_row[1]; numero=cuenta_row[2]; titular=cuenta_row[3]; tipo=cuenta_row[4]; moneda=cuenta_row[5]; ubicacion=cuenta_row[6]
+    numero_masked=f"****{numero[-4:]}" if len(numero)>4 else numero
+    return f'<div style="background:linear-gradient(135deg,#0f2027,#2c5364);padding:20px;border-radius:15px;color:white;border-left:5px solid #FFD700;"><h3 style="color:#FFD700;">💳 Cuenta Autorizada V50 - Ley 86-26 - 08694150021</h3><table style="width:100%;color:white;font-size:14px;"><tr><td><b>Banco:</b></td><td>{banco}</td></tr><tr><td><b>Titular:</b></td><td>{titular}</td></tr><tr><td><b>Tipo:</b></td><td>{tipo}</td></tr><tr><td><b>Moneda:</b></td><td>{moneda}</td></tr><tr><td><b>Ubicacion:</b></td><td>{ubicacion}</td></tr><tr><td><b>Numero:</b></td><td>{numero_masked}</td></tr><tr><td><b>Estado:</b></td><td style="color:#4CAF50;">Activa V50</td></tr></table></div>'
+
+def migrar_v50():
+    logs=[]
+    for base_vieja in BASES_VIEJAS:
+        p_vieja=Path(base_vieja)
+        if p_vieja.exists():
+            origen=p_vieja/"clientes_db" if (p_vieja/"clientes_db").exists() else p_vieja
+            if origen.exists():
+                for cli_dir in origen.iterdir():
+                    if cli_dir.is_dir() and cli_dir.name.startswith("CLI-"):
+                        destino=CASOS_DIR/cli_dir.name
+                        if not destino.exists():
+                            try:
+                                shutil.copytree(str(cli_dir), str(destino), dirs_exist_ok=True)
+                                logs.append(f"MIGRADO V50 {cli_dir.name} de {base_vieja}")
+                            except: pass
+    return logs
+
+if "migracion_v50" not in st.session_state:
+    st.session_state.migracion_logs=migrar_v50()
+    st.session_state.migracion_v50=True
+
+st.markdown("<style>.header-v50{background:linear-gradient(135deg,#0F2027,#203A43,#2C5364);padding:20px;border-radius:15px;text-align:center;color:white;border:2px solid #FFD700;}.footer-v50{background:#0F2027;color:white;padding:15px;border-radius:10px;margin-top:20px;border-left:5px solid #FFD700;}.ley-box{background:linear-gradient(135deg,#1a472a,#2d5a27);padding:15px;border-radius:10px;color:white;border:2px solid #4CAF50;}.admin-box{background:linear-gradient(135deg,#8B0000,#5a1a1a);padding:15px;border-radius:10px;color:white;border:2px solid #FFD700;}</style>", unsafe_allow_html=True)
+
+if "logged" not in st.session_state: st.session_state.logged=False
+if "modulo_activo" not in st.session_state: st.session_state.modulo_activo="DASHBOARD"
+if "recovery_mode" not in st.session_state: st.session_state.recovery_mode=False
+if "show_register" not in st.session_state: st.session_state.show_register=False
+
+if not st.session_state.logged:
+    st.markdown(f'<div class="header-v50"><h1>🎰 BASA JUEGOS Y AZAR V50 PROFESIONAL - Ley 86-26</h1><h2>Cuenta 08694150021 - Ahorros Pesos - Pedro Anibal Baldera | Base: BASA_JUEGOS_AZAR_V50_PROFESIONAL | RNC 133378711 | Formato Profesional - Sin puntos</h2><p style="color:#FFD700;">Baldera Santos & Asociados SRL - V50 - Ley 86-26 Gaceta 11263</p></div>', unsafe_allow_html=True)
+    c1,c2,c3=st.columns([1,2,1])
+    with c2:
+        tab_login, tab_register = st.tabs(["🔐 LOGIN V50", "📝 REGISTRO V50"])
+        with tab_login:
+            email=st.text_input("Correo - Usuario ID", key="login_email_v50")
+            pwd=st.text_input("Contraseña - Clave",type="password", key="login_pwd_v50")
+            if st.button("🚀 Entrar V50 - Ley 86-26 - 08694150021",use_container_width=True,type="primary"):
+                ph=hashlib.sha256(pwd.encode()).hexdigest()
+                if email==MASTER_USER["email"] and ph==MASTER_USER["password_hash"]:
+                    st.session_state.logged=True; st.session_state.user=email; st.session_state.role="ADMIN"; st.rerun()
+                else:
+                    found=False
+                    for cf in CASOS_DIR.iterdir():
+                        if cf.is_dir():
+                            for db_name in [f"BASA_JUEGO_{cf.name}_V50.db", f"BASA_JUEGO_{cf.name}.db"]:
+                                dbp=cf/db_name
+                                if dbp.exists():
+                                    try:
+                                        conn=sqlite3.connect(str(dbp)); c=conn.cursor()
+                                        c.execute("SELECT * FROM solicitantes WHERE email=? AND clave_hash=?", (email, ph))
+                                        row=c.fetchone(); conn.close()
+                                        if row:
+                                            st.session_state.logged=True; st.session_state.user=email; st.session_state.role="CLIENT"; st.session_state.client_id=row[0]; found=True; st.rerun()
+                                    except: pass
+                    if not found: st.error("❌ Credenciales incorrectas V50")
+        with tab_register:
+            st.markdown("### 📝 Registro Solicitante V50 Ley 86-26 + Pago 08694150021")
+            cuenta_activa_reg=get_cuenta_activa()
+            st.markdown(format_cuenta(cuenta_activa_reg), unsafe_allow_html=True)
+            reg_id=st.text_input("ID Solicitante Auto",value=f"CLI-{str(uuid.uuid4())[:4].upper()}")
+            reg_nombre=st.text_input("Nombre / Razon Social")
+            reg_rnc=st.text_input("RNC / Cedula")
+            reg_email=st.text_input("Correo Usuario ID")
+            reg_pwd=st.text_input("Contraseña Clave",type="password")
+            reg_tel=st.text_input("Telefono Real")
+            reg_dir=st.text_input("Direccion Real")
+            tipo_est=st.selectbox("Tipo Establecimiento Ley 86-26", ["Banca Loteria - 5 anos","Banca Deportiva - 10 anos - Max 15 tragamonedas","Casino - 10 anos - Solo hoteles 4 estrellas","Bingo - 3 anos","Apuestas por Internet - 10 anos"])
+            monto_pago=st.number_input("Monto a Pagar", value=5000.0)
+            ref_pago=st.text_input("Referencia Transferencia")
+            comp_pago=st.file_uploader("Comprobante Pago", type=["png","jpg","jpeg","pdf"])
+            if st.button("✅ REGISTRARME V50 - Ley 86-26 - 08694150021",use_container_width=True,type="primary"):
+                if reg_nombre and reg_rnc and reg_email and reg_pwd and ref_pago and comp_pago:
+                    dbp=init_db_v50(reg_id)
+                    comp_path=save_comp(reg_id, comp_pago)
+                    vigencia="5 anos" if "Loteria" in tipo_est else "10 anos" if "Deportiva" in tipo_est or "Casino" in tipo_est or "Internet" in tipo_est else "3 anos"
+                    articulos="Art 21,26,39,191" if "Loteria" in tipo_est else "Art 21,26,39,70-72"
+                    fecha_solicitud=datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+                    fecha_venc=(datetime.datetime.now()+datetime.timedelta(days=5*365 if "5 anos" in vigencia else 10*365)).strftime("%d-%m-%Y")
+                    conn=sqlite3.connect(str(dbp)); c=conn.cursor()
+                    c.execute("INSERT INTO solicitantes VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(reg_id,reg_nombre,reg_rnc,reg_email,reg_tel,reg_dir,tipo_est,vigencia,articulos,0,"Pendiente documentacion V50 Ley 86-26",fecha_solicitud,reg_email,hashlib.sha256(reg_pwd.encode()).hexdigest(),fecha_venc,18.4861,-69.9312,"192.168.1.100"))
+                    pago_id=f"PAGO-V50-{str(uuid.uuid4())[:8].upper()}"
+                    c.execute("INSERT INTO pagos VALUES (?,?,?,?,?,?,?,?,?,?,?)",(pago_id,reg_id,monto_pago,ref_pago,fecha_solicitud,comp_path,f"Pendiente Verificando V50 {cuenta_activa_reg[0]} Ley 86-26",cuenta_activa_reg[0],"","",reg_email))
+                    c.execute("INSERT OR REPLACE INTO cuentas_pago_admin VALUES (?,?,?,?,?,?,?,?,?,?,?)", cuenta_activa_reg)
+                    req_key="BANCA_LOTERIA_5ANOS"
+                    if "Deportiva" in tipo_est: req_key="BANCA_DEPORTIVA_10ANOS"
+                    if "Casino" in tipo_est: req_key="CASINO_10ANOS"
+                    requisitos=REQUISITOS_V50.get(req_key, REQUISITOS_V50["BANCA_LOTERIA_5ANOS"])["documentos"]
+                    for req in requisitos:
+                        doc_id=f"DOC-V50-{str(uuid.uuid4())[:6].upper()}"
+                        c.execute("INSERT INTO documentos_ley8626 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",(doc_id,reg_id,req['nombre'],req['art'],1,"Pendiente Cargar V50 "+req['art']+" Autoguardado","",fecha_solicitud,"","","Autoguardado V50",0))
+                    conn.commit(); conn.close()
+                    st.success(f"✅ CREADO V50 {reg_id} - {reg_nombre} - Cuenta {cuenta_activa_reg[0]} - 08694150021 - Ley 86-26 - Formato profesional - Sin puntos")
+                    st.balloons()
+                else: st.error("Complete todos los campos V50")
+    st.stop()
+
+st.markdown(f'<div class="header-v50"><h1>🎰 BASA JUEGOS Y AZAR V50 PROFESIONAL - Ley 86-26</h1><h2>RNC 133378711 | {CRED["empresa"]} | Base: BASA_JUEGOS_AZAR_V50_PROFESIONAL | Cuenta: 08694150021 - Ahorros Pesos - Pedro Anibal Baldera | V50 Sin puntos</h2></div>', unsafe_allow_html=True)
+
+def verificar_liberado(cid):
+    for db_name in [f"BASA_JUEGO_{cid}_V50.db", f"BASA_JUEGO_{cid}.db"]:
+        dbp=CASOS_DIR/cid/db_name
+        if dbp.exists():
+            try:
+                conn=sqlite3.connect(str(dbp)); c=conn.cursor()
+                c.execute("SELECT estado FROM pagos WHERE solicitante_id=? ORDER BY fecha_pago DESC LIMIT 1", (cid,))
+                row=c.fetchone(); conn.close()
+                if row and "Liberado" in row[0]: return True
+            except: pass
+    if st.session_state.role=="ADMIN": return True
+    return False
+
+with st.sidebar:
+    st.write(f"Usuario: {st.session_state.user} - Rol: {st.session_state.role} - V50")
+    client_id_input=st.text_input("ID Solicitante V50",value=st.session_state.get("client_id","CLI-D452"))
+    cuenta_activa_sidebar=get_cuenta_activa()
+    st.markdown(format_cuenta(cuenta_activa_sidebar), unsafe_allow_html=True)
+    if verificar_liberado(client_id_input): st.success(f"✅ Liberado V50 - {client_id_input}")
+    else: st.error(f"⚠️ No liberado V50 - {client_id_input} - Pague 08694150021")
+    if st.button("✅ Crear/Verificar DB V50 - Migrar Sin Perdidas"): 
+        dbp=init_db_v50(client_id_input)
+        conn=sqlite3.connect(str(dbp)); c=conn.cursor()
+        c.execute("INSERT OR REPLACE INTO cuentas_pago_admin VALUES (?,?,?,?,?,?,?,?,?,?,?)", cuenta_activa_sidebar)
+        conn.commit(); conn.close()
+        st.success(f"DB V50 OK: {dbp}")
+    if st.session_state.role=="ADMIN":
+        with st.expander("🔧 Crear Cuenta V50 RD/USA"):
+            banco=st.selectbox("Banco V50", ["BHD León","Banreservas","Popular","Bank of America USA"], key="banco_v50")
+            numero=st.text_input("Numero Cuenta V50", value="08694150021", key="num_v50")
+            titular=st.text_input("Titular V50", value="Pedro Anibal Baldera", key="tit_v50")
+            tipo=st.selectbox("Tipo V50", ["Ahorros en Pesos","Ahorros en Dolares","Corriente"], key="tipo_v50")
+            moneda=st.selectbox("Moneda V50", ["DOP - Pesos Dominicanos","USD - Dolares USA"], key="moneda_v50")
+            ubic=st.selectbox("Ubicacion V50", ["RD Local - Republica Dominicana","USA - Estados Unidos"], key="ubic_v50")
+            if st.button("✅ Crear Cuenta V50", key="crear_v50"):
+                cuenta_id=f"CUENTA-V50-{str(uuid.uuid4())[:6].upper()}"
+                dbp_admin=get_db_path(client_id_input)
+                conn=sqlite3.connect(str(dbp_admin)); c=conn.cursor()
+                c.execute("INSERT INTO cuentas_pago_admin VALUES (?,?,?,?,?,?,?,?,?,?,?)",(cuenta_id,banco,numero,titular,tipo,moneda,ubic,"Activa",datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"),st.session_state.user,f"Cuenta V50 {numero}"))
+                conn.commit(); conn.close()
+                st.success(f"✅ Cuenta V50 creada - {banco} {numero} - Formato profesional - Sin puntos")
+                st.rerun()
+    if st.button("🚪 Salir V50"): st.session_state.logged=False; st.rerun()
+
+mod=st.selectbox("Modulo V50 - Ley 86-26 - Sin puntos - Solo numeros redondos", ["DASHBOARD","DOCUMENTACION_8626","CONTRATO_INTERMEDIACION","LEVANTAMIENTO_BANCAS","PAGOS"])
+
+if mod=="DASHBOARD":
+    st.header("📊 Dashboard V50 - Ley 86-26 - Cuenta 08694150021 - Formato profesional - Sin puntos - Solo numeros redondos")
+    cuenta=get_cuenta_activa()
+    st.markdown(format_cuenta(cuenta), unsafe_allow_html=True)
+    st.markdown('<div class="ley-box"><h3>📜 Ley 86-26 V50 - Gaceta 11263</h3><p>Art 21 Tipos 5/10 anos, Art 26 Distancia 500m escuelas/iglesias/hospitales y 200m/500m bancas, Art 39 Requisitos, Art 47 Casinos 10 anos, Art 70-72 Tragamonedas Max 15 y 85% devolucion, Art 191 Congela 10 anos</p></div>', unsafe_allow_html=True)
+    total=len([d for d in CASOS_DIR.iterdir() if d.is_dir()])
+    st.metric("Solicitantes V50",total)
+    acumulado=[]
+    for cf in CASOS_DIR.iterdir():
+        if cf.is_dir():
+            for db_name in [f"BASA_JUEGO_{cf.name}_V50.db", f"BASA_JUEGO_{cf.name}.db"]:
+                dbp=cf/db_name
+                if dbp.exists():
+                    try:
+                        conn=sqlite3.connect(str(dbp)); c=conn.cursor()
+                        c.execute("SELECT * FROM solicitantes WHERE id=?", (cf.name,))
+                        row=c.fetchone(); conn.close()
+                        if row: acumulado.append({"ID":row[0],"Nombre":row[1],"Tipo":row[6],"Avance %":row[9],"Vencimiento":row[14],"Cuenta":cuenta[0],"Version":"V50"})
+                    except: pass
+                    break
+    if acumulado:
+        df=pd.DataFrame(acumulado)
+        st.dataframe(df, use_container_width=True)
+        st.download_button("📥 Descargar Historico V50", df.to_csv(index=False), file_name=f"historico_v50_{datetime.datetime.now().strftime('%Y%m%d')}.csv")
+
+if mod=="DOCUMENTACION_8626":
+    st.header(f"📄 Documentacion V50 - {client_id_input} - Autoguardado automatico - Sin puntos")
+    dbp=get_db_path(client_id_input)
+    if not dbp.exists():
+        dbp=CASOS_DIR/client_id_input/f"BASA_JUEGO_{client_id_input}.db"
+    conn=sqlite3.connect(str(dbp)); c=conn.cursor()
+    c.execute("SELECT * FROM solicitantes WHERE id=?", (client_id_input,))
+    sol=c.fetchone()
+    if not sol: st.warning("No hay solicitante V50"); conn.close(); st.stop()
+    st.info(f"Solicitante: {sol[1]} - Tipo: {sol[6]} - Avance: {sol[9]}% - Ley 86-26 - {sol[8]} - IP: {sol[17]} - Ubicacion: {sol[15]},{sol[16]}")
+    for idx, req in enumerate(REQUISITOS_V50["BANCA_LOTERIA_5ANOS"]["documentos"]):
+        col1,col2,col3,col4=st.columns([2,1,1,1])
+        with col1: st.markdown(f"**{req['nombre']}**<br><small>{req['art']}</small> {'🔴' if req['obligatorio'] else '⚪'}")
+        with col2:
+            c.execute("SELECT * FROM documentos_ley8626 WHERE solicitante_id=? AND nombre_documento=?", (client_id_input, req['nombre']))
+            doc=c.fetchone()
+            st.write(doc[5] if doc else "Pendiente V50")
+        with col3:
+            uploaded=st.file_uploader(f"Subir V50 {idx}", type=["pdf","png","jpg","jpeg"], key=f"doc_v50_{idx}_{client_id_input}", label_visibility="collapsed")
+            if uploaded:
+                path=save_doc(client_id_input, uploaded, req['nombre'])
+                if doc:
+                    c.execute("UPDATE documentos_ley8626 SET archivo_path=?, estado=?, fecha_subida=?, porcentaje=? WHERE id=?", (path, f"Subido Pendiente Validacion Autoguardado V50 {req['art']}", datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"), 50, doc[0]))
+                else:
+                    doc_id=f"DOC-V50-{str(uuid.uuid4())[:6].upper()}"
+                    c.execute("INSERT INTO documentos_ley8626 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",(doc_id,client_id_input,req['nombre'],req['art'],1,f"Subido Pendiente Autoguardado V50 {req['art']}",path,datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"),"","","V50 Autoguardado",50))
+                conn.commit()
+                avance=calcular_avance(client_id_input)
+                c.execute("UPDATE solicitantes SET porcentaje_avance=? WHERE id=?", (avance, client_id_input))
+                conn.commit()
+                st.success(f"✅ Autoguardado V50 - Avance {avance}%")
+                st.rerun()
+        with col4:
+            if doc and doc[6]:
+                if st.button(f"✅ Validar V50", key=f"val_v50_{idx}_{client_id_input}"):
+                    c.execute("UPDATE documentos_ley8626 SET estado=?, validado_por=?, fecha_validacion=?, porcentaje=? WHERE id=?", (f"Validado Full 100% V50 {req['art']} Ley 86-26 Autoguardado", st.session_state.user, datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"), 100, doc[0]))
+                    conn.commit()
+                    avance=calcular_avance(client_id_input)
+                    c.execute("UPDATE solicitantes SET porcentaje_avance=? WHERE id=?", (avance, client_id_input))
+                    conn.commit()
+                    st.success(f"Validado V50 - Avance {avance}%")
+                    st.rerun()
+    avance_final=calcular_avance(client_id_input)
+    conn.close()
+    st.progress(avance_final/100)
+    st.write(f"Avance Total V50: {avance_final}% - {'FULL 100% APROBADO V50' if avance_final==100 else f'Pendiente {100-avance_final}% V50'}")
+
+if mod=="LEVANTAMIENTO_BANCAS":
+    if st.session_state.role!="ADMIN":
+        st.error("⛔ Solo Admin puede ver - Direccion real, telefono, propietario - Solo Admin V50")
+        st.stop()
+    st.header("🏢 Levantamiento V50 Bancas Informales - IP + Ubicacion + Propietario - Solo Admin - Ley 86-26")
+    st.markdown('<div class="admin-box"><b>🔒 Solo Admin V50:</b> Direccion real, telefono, propietario, IP red - Solo Admin ve - V50 Sin puntos</div>', unsafe_allow_html=True)
+    dbp=get_db_path(client_id_input)
+    if not dbp.exists(): dbp=CASOS_DIR/client_id_input/f"BASA_JUEGO_{client_id_input}.db"
+    conn=sqlite3.connect(str(dbp))
+    col1,col2=st.columns(2)
+    with col1:
+        nombre_banca=st.text_input("Nombre Banca Informal V50", value="Banca La Suerte V50")
+        tipo_banca=st.selectbox("Tipo V50", ["Banca Loteria Informal - 5 anos","Banca Deportiva Informal - 10 anos","Casino Informal"])
+        direccion_real=st.text_input("Direccion Real Solo Admin V50", value="Calle Principal #123 V50")
+        telefono_real=st.text_input("Telefono Real Solo Admin V50", value="829-123-4567")
+        propietario=st.text_input("Propietario V50", value="Juan Perez V50")
+    with col2:
+        lat=st.number_input("Latitud V50", value=18.4861, format="%.6f")
+        lon=st.number_input("Longitud V50", value=-69.9312, format="%.6f")
+        ip_red=st.text_input("IP Licencia Red V50", value="192.168.1.100")
+        estado_form=st.selectbox("Estado V50", ["Informal - Sin licencia","Formal - Con licencia","En proceso"])
+        redes=st.text_area("Redes Sociales V50", value="Facebook: Banca La Suerte V50, Instagram: @bancalasuerte, WhatsApp: 829-123-4567")
+        fotos=st.file_uploader("Fotos Fachada V50", type=["png","jpg","jpeg"])
+    if st.button("✅ Guardar Levantamiento V50 - Solo Admin - Ley 86-26", type="primary", use_container_width=True):
+        foto_path=""
+        if fotos: foto_path=save_doc(client_id_input, fotos, "levantamiento_"+nombre_banca+"_v50")
+        lev_id=f"LEV-V50-{str(uuid.uuid4())[:6].upper()}"
+        c=conn.cursor()
+        c.execute("INSERT INTO levantamiento_bancas VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(lev_id,nombre_banca,tipo_banca,direccion_real,telefono_real,propietario,"001-1234567-8",lat,lon,ip_red,estado_form,foto_path,datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"),st.session_state.user,json.dumps({"redes":redes,"version":"V50"}),1,0))
+        conn.commit()
+        st.success(f"✅ Levantamiento V50 {lev_id} - {nombre_banca} - IP {ip_red} - Solo Admin V50")
+    try:
+        df_lev=pd.read_sql_query("SELECT id, nombre_banca, tipo, direccion_real, telefono_real, propietario_responsable, latitud, longitud, ip_red, estado_formalidad FROM levantamiento_bancas ORDER BY fecha_levantamiento DESC", conn)
+        st.dataframe(df_lev, use_container_width=True)
+        st.download_button("📥 Descargar Base Datos V50 Solo Admin", df_lev.to_csv(index=False), file_name=f"levantamiento_bancas_v50_{datetime.datetime.now().strftime('%Y%m%d')}.csv")
+    except Exception as e: st.info(f"Sin levantamientos V50: {e}")
+    conn.close()
+
+if mod=="CONTRATO_INTERMEDIACION":
+    st.header("📜 Contrato Intermediacion V50 - Ley 86-26 - Cuenta 08694150021")
+    dbp=get_db_path(client_id_input)
+    if not dbp.exists(): dbp=CASOS_DIR/client_id_input/f"BASA_JUEGO_{client_id_input}.db"
+    conn=sqlite3.connect(str(dbp)); c=conn.cursor()
+    c.execute("SELECT * FROM solicitantes WHERE id=?", (client_id_input,))
+    sol=c.fetchone()
+    if not sol: st.warning("Cree solicitante V50"); conn.close(); st.stop()
+    cuenta=get_cuenta_activa()
+    st.markdown(format_cuenta(cuenta), unsafe_allow_html=True)
+    contrato_texto=f"CONTRATO INTERMEDIACION V50 JUEGOS AZAR - LEY 86-26 GACETA 11263\\nEntre {CRED['empresa']} RNC {CRED['rnc']} y {sol[1]} RNC {sol[2]}\\nTipo: {sol[6]} - Vigencia {sol[7]} - Art {sol[8]} - V50\\nIP: {sol[17]} - Ubicacion: {sol[15]},{sol[16]}\\nCuenta V50: 08694150021 - Ahorros Pesos - Pedro Anibal Baldera"
+    st.text_area("Contrato V50", value=contrato_texto, height=300)
+    firma=st.text_input("Firma Electronica V50", value=sol[1])
+    contrato_upload=st.file_uploader("Subir Contrato Firmado V50", type=["pdf","png","jpg"])
+    if st.button("✅ Firmar Contrato V50 + Validar Hacienda Full", type="primary", use_container_width=True):
+        path=""
+        if contrato_upload: path=save_doc(client_id_input, contrato_upload, "contrato_"+sol[1]+"_v50")
+        cid=f"CONT-V50-{str(uuid.uuid4())[:6].upper()}"
+        c.execute("INSERT INTO contratos_intermediacion VALUES (?,?,?,?,?,?,?,?,?,?)",(cid,client_id_input,"Intermediacion V50 Ley 86-26","Firmado V50",path,firma,datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"),"","Pendiente Hacienda V50","Pendiente Cliente V50"))
+        conn.commit()
+        st.success(f"✅ Contrato V50 {cid} firmado")
+    try:
+        df_cont=pd.read_sql_query("SELECT * FROM contratos_intermediacion WHERE solicitante_id=?", (client_id_input,))
+        st.dataframe(df_cont, use_container_width=True)
+    except Exception as e: st.info(f"Sin contratos V50: {e}")
+    conn.close()
+
+if mod=="PAGOS":
+    st.header("💳 Pagos V50 - Cuenta Autorizada - 08694150021 - V50 Sin puntos")
+    cuenta=get_cuenta_activa()
+    st.markdown(format_cuenta(cuenta), unsafe_allow_html=True)
+    dbp=get_db_path(client_id_input)
+    if not dbp.exists(): dbp=CASOS_DIR/client_id_input/f"BASA_JUEGO_{client_id_input}.db"
+    conn=sqlite3.connect(str(dbp))
+    try:
+        df_pagos=pd.read_sql_query("SELECT * FROM pagos WHERE solicitante_id=? ORDER BY fecha_pago DESC", (client_id_input,))
+        st.dataframe(df_pagos, use_container_width=True)
+        if st.session_state.role=="ADMIN":
+            pago_id=st.text_input("ID Pago a Liberar V50")
+            if st.button("✅ ADMIN LIBERAR FULL V50 - 08694150021"):
+                c=conn.cursor()
+                c.execute("UPDATE pagos SET estado=?, liberado_por=?, fecha_liberacion=? WHERE id=?",(f"Liberado Full V50 {cuenta[0]} 08694150021 ADMIN",st.session_state.user,datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"),pago_id))
+                conn.commit(); st.success(f"Liberado V50 {pago_id}")
+    except Exception as e: st.info(f"Sin pagos V50: {e}")
+    conn.close()
+
+st.markdown(f'<div class="footer-v50"><b>{CRED["nombre"]} - BASA JUEGOS AZAR V50 PRO - Ley 86-26 - Cuenta 08694150021</b><br>{CRED["empresa"]} | RNC {CRED["rnc"]} | Base: BASA_JUEGOS_AZAR_V50_PROFESIONAL | Cuenta: 08694150021 - Ahorros Pesos - Pedro Anibal Baldera | Formato Profesional | Sin puntos | V50 Solo numeros redondos | Streamlit.io compatible</div>', unsafe_allow_html=True)
